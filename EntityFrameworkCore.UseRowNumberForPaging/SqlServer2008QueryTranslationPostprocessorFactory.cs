@@ -12,6 +12,7 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
     {
         private readonly QueryTranslationPostprocessorDependencies _dependencies;
         private readonly RelationalQueryTranslationPostprocessorDependencies _relationalDependencies;
+
         public SqlServer2008QueryTranslationPostprocessorFactory(QueryTranslationPostprocessorDependencies dependencies, RelationalQueryTranslationPostprocessorDependencies relationalDependencies)
         {
             _dependencies = dependencies;
@@ -23,18 +24,21 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
                 _dependencies,
                 _relationalDependencies,
                 queryCompilationContext);
+
         public class SqlServer2008QueryTranslationPostprocessor : RelationalQueryTranslationPostprocessor
         {
             public SqlServer2008QueryTranslationPostprocessor(QueryTranslationPostprocessorDependencies dependencies, RelationalQueryTranslationPostprocessorDependencies relationalDependencies, QueryCompilationContext queryCompilationContext)
-                : base(dependencies, relationalDependencies, queryCompilationContext)
+                : base(dependencies, relationalDependencies, (RelationalQueryCompilationContext)queryCompilationContext)
             {
             }
+
             public override Expression Process(Expression query)
             {
                 query = base.Process(query);
                 query = new Offset2RowNumberConvertVisitor(query, RelationalDependencies.SqlExpressionFactory).Visit(query);
                 return query;
             }
+
             internal class Offset2RowNumberConvertVisitor : ExpressionVisitor
             {
 #if !NET5_0
@@ -45,6 +49,7 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
 #endif
                 private readonly Expression root;
                 private readonly ISqlExpressionFactory sqlExpressionFactory;
+
                 static Offset2RowNumberConvertVisitor()
                 {
                     var method = typeof(SelectExpression).GetMethod("GenerateOuterColumn", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -59,11 +64,13 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
         GenerateOuterColumnAccessor = (Func<SelectExpression, SqlExpression, string, ColumnExpression>)method.CreateDelegate(typeof(Func<SelectExpression, SqlExpression, string, ColumnExpression>));
 #endif
                 }
+
                 public Offset2RowNumberConvertVisitor(Expression root, ISqlExpressionFactory sqlExpressionFactory)
                 {
                     this.root = root;
                     this.sqlExpressionFactory = sqlExpressionFactory;
                 }
+
                 protected override Expression VisitExtension(Expression node)
                 {
                     if (node is ShapedQueryExpression shapedQueryExpression)
@@ -74,6 +81,7 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
                         node = VisitSelect(se);
                     return base.VisitExtension(node);
                 }
+
                 private Expression VisitSelect(SelectExpression selectExpression)
                 {
                     var oldOffset = selectExpression.Offset;
@@ -85,6 +93,17 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
                         ? oldOrderings.ToList()
                         : new List<OrderingExpression>();
                     // Change SelectExpression
+#if NET9_0
+                    selectExpression = selectExpression.Update(
+                        projections: selectExpression.Projection.ToList(),
+                        tables: selectExpression.Tables.ToList(),
+                        predicate: selectExpression.Predicate,
+                        groupBy: selectExpression.GroupBy.ToList(),
+                        having: selectExpression.Having,
+                        orderings: newOrderings,
+                        limit: null,
+                        offset: null);
+#else
                     selectExpression = selectExpression.Update(selectExpression.Projection.ToList(),
                                                                selectExpression.Tables.ToList(),
                                                                selectExpression.Predicate,
@@ -93,6 +112,7 @@ namespace EntityFrameworkCore.UseRowNumberForPaging
                                                                orderings: newOrderings,
                                                                limit: null,
                                                                offset: null);
+#endif
                     var rowOrderings = oldOrderings.Count != 0 ? oldOrderings
                         : new[] { new OrderingExpression(new SqlFragmentExpression("(SELECT 1)"), true) };
 
